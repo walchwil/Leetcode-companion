@@ -190,3 +190,253 @@ Skill 是流程说明，不是凭证。
 - 页面：可访问则给页面位置。
 
 用户不需要再手动整理。
+
+---
+
+## 13. Last-mile 核心原则：教学与博客结构彻底解耦
+
+博客只是学习成果的**下游发布适配器**，绝不能反向塑造前面的 LeetCode 教学。
+
+必须保持：
+
+```text
+真实刷题讨论
+  ↓
+3补 / 3看 / 推导 / Python / 3背
+  ↓
+形成已经自洽的学习成果
+  ↓
+【发布边界】
+  ↓
+把成果序列化为当前博客 schema
+  ↓
+写 GitHub → Actions → Pages
+```
+
+因此：
+
+- 讲题阶段不为了凑 `ProblemArticle` 字段而改变讲解顺序；
+- 不因为网站当前只有某些 section，就删掉本题真正有价值的教学内容；
+- 不把 `focus`、`equation`、`takeaways` 等网页字段暴露成用户必须填写的表单；
+- 先完成教学，再做 schema mapping；
+- 如果博客 schema 表达不了某个高价值学习点，优先保留在内部学习归档；只有用户要求改网站时，才进入网站结构设计任务。
+
+一句话：**content-first，schema-second。**
+
+## 14. “更新到博客”后的工具级执行序列
+
+当用户发出发布触发词后，Agent 按下面顺序自动执行，不把这些步骤变成用户待办：
+
+### Phase A：锁定本次发布对象
+
+从刚结束的讨论中确定：
+
+- `id`
+- `slug`
+- 中英文标题
+- 最终 Python 解法
+- 本题最终 3背
+- 正规定义 + 祛魅映射
+- Python micro-lesson
+- 复杂度、边界、take-away
+
+若信息足够，禁止让用户重复提供。
+
+### Phase B：发现 GitHub 能力
+
+优先使用当前环境已有的 GitHub connector / app / MCP / repository tool。
+
+需要的最小能力是：
+
+1. 读取 repository metadata；
+2. 读取文件及 blob SHA；
+3. 更新 UTF-8 文本文件并提交；
+4. 查看 commit / workflow run；
+5. 必要时读取 workflow job/log。
+
+如果能直接读写 `walchwil/walchwil.github.io`，不需要用户把仓库 clone 到本地，也不要求用户手动 `git add/commit/push`。
+
+### Phase C：实时读取发布契约
+
+每次都重新读取 live repo，而不是相信 Skill 内的旧路径：
+
+```text
+repo metadata
+  ↓
+README.md
+  ↓
+content/problems.ts
+  ↓
+.github/workflows/*（必要时）
+```
+
+确认当前仍是：
+
+```text
+walchwil/walchwil.github.io
+main
+content/problems.ts
+push main → GitHub Actions → GitHub Pages
+```
+
+如果 live repo 已变化，以 live repo 为准，并在不改变教学内容的前提下适配新的发布结构。
+
+### Phase D：生成“语义增量”，不要重写整个博客
+
+先按 `id` + `slug` 找到当前题：
+
+```text
+存在 completed → 更新该题 article
+存在 planned   → 原地升级为 completed
+不存在          → 新增一个符合 live schema 的 Problem
+```
+
+生成修改时只操作当前题对象。
+
+尤其禁止：
+
+- 重新格式化整个 `problems.ts`；
+- 改动无关题目的文案；
+- 根据聊天记忆恢复一个旧版本文件；
+- 因为新增一题而重排整个数组；
+- 直接改 `out/` 生成物。
+
+### Phase E：并发安全写入
+
+发布采用“read-latest → edit → compare-and-write”的思路：
+
+1. fetch 最新 `content/problems.ts`；
+2. 保存它的 blob SHA；
+3. 在这份最新内容上应用当前题增量；
+4. 使用该 SHA 执行 update；
+5. GitHub 若报告 SHA 已变化/冲突，说明有人在步骤 1 后又修改了 main；
+6. 此时重新 fetch 最新文件，只重新应用当前题增量；
+7. 不 force push、不覆盖未知修改。
+
+这使“ChatGPT 发布”和“用户本地刚 push”尽可能不会互相踩掉。
+
+但远端无法感知**尚未 push 的本地文件**。如果用户明确告诉我们本地存在未 push 的 `content/problems.ts` 修改，先让用户 push，或切换到分支/PR 工作流。
+
+### Phase F：提交策略
+
+默认单题内容更新直接提交 `main`，因为这是低风险、单文件、可逆的内容变更，也是“一句话发布”体验的关键。
+
+commit 示例：
+
+```text
+docs(leetcode): publish 070 climbing-stairs
+docs(leetcode): update 001 two-sum
+```
+
+以下情况自动升级为 branch + PR，而不是直接改 main：
+
+- 需要调整 TypeScript 类型；
+- 需要改 React/Next.js 组件；
+- 需要改路由、样式、构建或 workflow；
+- 一次修改多个核心文件；
+- 发现无法安全地做局部内容增量；
+- 用户明确要求先看 diff。
+
+## 15. 幂等性：同一句“更新到博客”重复执行也不能产生重复文章
+
+发布流程必须是 idempotent：
+
+- `id` 和 `slug` 是主定位键；
+- 已有同题时更新，不新增第二份；
+- 同一次讨论重复触发“更新到博客”，只会刷新同一题内容；
+- 如果目标内容与 live repo 已完全一致，允许直接报告“已是最新”，不要制造无意义 commit。
+
+这条规则保证用户可以放心把“更新到博客”当成一个按钮，而不必记自己刚才是否已经说过一次。
+
+## 16. GitHub Actions 是发布事务的后半段
+
+写入 GitHub 只是 Source Commit，不等于网页上线。
+
+对于当前站点，完整事务是：
+
+```text
+update content/problems.ts
+  ↓
+commit 到 main
+  ↓
+Deploy public mirror workflow
+  ↓
+npm ci
+  ↓
+npm run build:pages
+  ↓
+上传 ./out
+  ↓
+GitHub Pages deploy
+  ↓
+线上页面验收
+```
+
+Agent 必须区分三种状态：
+
+- **Committed**：源码已写入，但构建尚未结束；
+- **Deployed**：Actions 成功，Pages 已部署；
+- **Verified**：线上页面已实际检查到新内容。
+
+最终回执优先报告最高达到的真实状态，不得把 Committed 说成 Verified。
+
+如果 Actions 失败：
+
+1. 找到与本次 commit 对应的 workflow run；
+2. 找失败 job；
+3. 读失败 step / log；
+4. 判断是本次内容导致的 TS/build 问题，还是外部 infra 问题；
+5. 若是本次变更导致，自动修复并提交 corrective commit；
+6. 再等待部署；
+7. 若无法安全修复，再向用户报告具体阻塞点。
+
+## 17. 线上验收标准
+
+部署成功后，继续验证：
+
+1. `https://walchwil.github.io/` 首页能看到/检索到该题；
+2. `https://walchwil.github.io/problems/<slug>/` 可访问；
+3. 页面标题与题号正确；
+4. 难度、topics、状态正确；
+5. foundation 正规定义与祛魅映射没有丢失；
+6. Python 代码完整、缩进正常；
+7. takeaways 与本次讨论一致；
+8. 没有把聊天中的私密/无关内容发布出去。
+
+如果 Pages 部署刚成功但 CDN/缓存仍显示旧内容，可短暂重试；在实际读到新内容前，只报告 `Deployed`，不报告 `Verified`。
+
+## 18. 用户体验：把整条链路压缩成一句话
+
+用户侧理想交互只有：
+
+```text
+用户：更新到博客
+```
+
+Agent 内部完成：
+
+```text
+读取当前讨论
+→ 整理学习成果
+→ 读取 live repo
+→ 找到当前题
+→ 映射 schema
+→ 安全写入
+→ commit
+→ 看 Actions
+→ 必要时修 build
+→ 验证 Pages
+→ 回执
+```
+
+正常情况下不要把 git 操作步骤反过来交给用户。
+
+只有遇到真正无法自行解决的外部状态时才打断，例如：
+
+- GitHub 未连接/无写权限；
+- 当前题无法确定；
+- 用户明确存在未 push 的冲突本地修改；
+- 发布需要网站架构级改造；
+- GitHub/Pages 服务异常。
+
+这就是本 Skill 的最后一公里目标：**学习结束后，用户只负责表达“我要发布”，Agent 负责把已经形成的高质量学习成果安全地送到公开博客。**
