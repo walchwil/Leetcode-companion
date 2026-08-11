@@ -440,3 +440,127 @@ Agent 内部完成：
 - GitHub/Pages 服务异常。
 
 这就是本 Skill 的最后一公里目标：**学习结束后，用户只负责表达“我要发布”，Agent 负责把已经形成的高质量学习成果安全地送到公开博客。**
+
+## 19. 先分清“仓库”和“网页”：真正修改的是源码，不是网址
+
+`https://walchwil.github.io/` 是 GitHub Pages 展示出来的网页；真正可写的源头是 GitHub 仓库 `walchwil/walchwil.github.io`。
+
+因此“更新博客”应理解为：
+
+```text
+当前刷题讨论
+  ↓
+生成博客文章数据
+  ↓
+修改 GitHub 仓库里的源文件（当前是 content/problems.ts）
+  ↓
+产生一个 Git commit
+  ↓
+GitHub Actions 构建静态站点
+  ↓
+GitHub Pages 更新 https://walchwil.github.io/
+```
+
+不要尝试“编辑 GitHub Pages 页面本身”，也不要把浏览器中看到的 HTML 当作内容源。Pages 是构建结果，repository source 才是 source of truth。
+
+## 20. Runtime Adapter：Skill 负责决策，GitHub 工具负责执行
+
+把发布流程看成两个解耦模块：
+
+```text
+leetcode-companion
+= 教学 + 学习成果抽取 + 发布决策
+
+GitHub adapter
+= 读取远端 + 修改文件 + commit + 检查 Actions
+```
+
+Skill 不应绑定某一种具体客户端。执行能力按以下优先级选择：
+
+1. **当前 Chat 中可写 GitHub connector/app**：首选。直接调用 GitHub API 读取并更新仓库，不需要本地 clone；
+2. **Codex / 本地 Agent 已 clone 仓库**：可以在本地修改、运行构建测试，然后正常 commit/push；
+3. **只有 GitHub CLI / git shell**：使用 `git pull --ff-only` → 修改源文件 → build/test → commit → push；
+4. **只有只读 GitHub 能力**：只生成 patch，不谎称已发布；
+5. **没有任何 GitHub 能力**：停止在“待发布内容”阶段，并明确缺失的是执行权限而不是 Skill 逻辑。
+
+无论采用哪种 adapter，上游的讲题方式、3补/3看/3背、基础祛魅和 Python 点拨都不得改变。
+
+## 21. 当前环境存在 GitHub 写能力时，默认直接完成最后一公里
+
+如果 Agent 能确认对 `walchwil/walchwil.github.io` 有 push/write 权限，则用户说“更新到博客”之后，不应再让用户执行：
+
+- clone 仓库；
+- 打开 `content/problems.ts`；
+- 复制粘贴文章；
+- `git add`；
+- `git commit`；
+- `git push`。
+
+这些都属于 Agent 的执行细节。
+
+默认发布事务：
+
+```text
+1. 从当前对话生成“题目学习成果对象”
+2. fetch live repo metadata
+3. fetch README / content schema / 最新 content/problems.ts
+4. 读取当前 blob SHA
+5. 按 id + slug 做局部增量
+6. schema / TypeScript / slug / 隐私自检
+7. compare-and-write 到 main
+8. 获取新 commit SHA
+9. 跟踪该 commit 的 Actions
+10. Actions 成功后验证首页和详情页
+11. 给用户一句简洁回执
+```
+
+如果第 7 步因 blob SHA 过期失败，必须重新读取最新文件后重放“当前题增量”，而不是 force push。
+
+## 22. 与用户本地开发并存：远端 main 永远优先作为发布基线
+
+用户可能同时在本地 Codex 中修改博客前端。因此每次发布都要假定存在并行开发的可能。
+
+规则：
+
+- 未收到“本地有未 push 修改”的明确信号时：以远端 `main` 最新 SHA 为发布基线；
+- 用户刚说“我已经 push 了”：重新 fetch `main`，绝不使用发布流程启动时的旧快照；
+- 用户说“本地还改着 / 还没 push”：不要直接改同一文件的远端 main；优先等待其 push，或创建 branch + PR；
+- 若本地改的是组件而本次仅更新 `content/problems.ts`，仍需读取最新远端，不能根据“应该不冲突”进行盲写；
+- 永不 force push。
+
+目标是让“本地 Codex 开发”和“ChatGPT 一句话发布题解”可以长期并存，而不是互相覆盖。
+
+## 23. 发布边界的数据模型：Discussion Artifact → Blog Adapter
+
+为了彻底防止博客结构反向影响教学，在内部把一次刷题结束后的成果视为一个与网页无关的 Discussion Artifact。它至少包含：
+
+```text
+problem identity
+formal foundation definition
+demystified mapping
+naive baseline
+bottleneck
+optimized reasoning
+final Python solution
+complexity
+Python micro-lessons
+3背
+takeaways
+boundaries / bugs
+```
+
+然后发布阶段才做：
+
+```text
+Discussion Artifact
+  ↓
+读取 live blog schema
+  ↓
+Blog Adapter 映射
+  ↓
+Problem / ProblemArticle
+```
+
+这样即使未来博客从 `problems.ts` 改成 Markdown、MDX、数据库或 CMS，LeetCode 教学 Skill 的主体也无需重写，只替换最后的 Blog Adapter。
+
+**永久原则：教学内容是上游 source of truth；博客 schema 只是下游序列化格式。**
